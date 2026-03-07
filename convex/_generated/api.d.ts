@@ -11,6 +11,7 @@
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as echoes from "../echoes.js";
+import type * as seed from "../seed.js";
 import type * as tts from "../tts.js";
 import type * as ttsUsage from "../ttsUsage.js";
 import type * as users from "../users.js";
@@ -25,6 +26,7 @@ declare const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
   crons: typeof crons;
   echoes: typeof echoes;
+  seed: typeof seed;
   tts: typeof tts;
   ttsUsage: typeof ttsUsage;
   users: typeof users;

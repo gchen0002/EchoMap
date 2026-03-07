@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import {
   encodeGeohash,
   getQueryGeohashes,
@@ -130,12 +130,46 @@ export const createEcho = mutation({
   },
 });
 
+export const createEchoInternal = internalMutation({
+  args: {
+    userId: v.id("users"),
+    lat: v.number(),
+    lng: v.number(),
+    audioStorageId: v.optional(v.id("_storage")),
+    text: v.optional(v.string()),
+    isAiGenerated: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const geohash = encodeGeohash(args.lat, args.lng);
+    const now = Date.now();
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
+    return await ctx.db.insert("echoes", {
+      userId: args.userId,
+      lat: args.lat,
+      lng: args.lng,
+      geohash,
+      audioStorageId: args.audioStorageId,
+      text: args.text,
+      isAiGenerated: args.isAiGenerated,
+      createdAt: now,
+      expiresAt: now + TWENTY_FOUR_HOURS,
+    });
+  },
+});
+
 /**
  * Generate an upload URL for audio files (native recordings or Google TTS output).
  */
 export const generateUploadUrl = mutation({
   handler: async (ctx) => {
     await requireIdentity(ctx);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const generateUploadUrlInternal = internalMutation({
+  handler: async (ctx) => {
     return await ctx.storage.generateUploadUrl();
   },
 });

@@ -1,187 +1,188 @@
-"use node";
-
 import { v } from "convex/values";
-import { internalMutation, from "./_generated/server";
+import { action, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
-import { encodeGeohash } from "../lib/geohash";
-
-/**
- * Seed the database with dummy data for demos and testing.
- * 
- * This script creates:
- * - 3 demo users (Alice, Bob, Charlie)
- * - 10-15 strategic echoes at various locations
- * - All echoes use Google Cloud TTS for audio generation
- * - Echoes expire in 24 hours (like real ones)
- */
-
-// Demo user data
 const DEMO_USERS = [
   {
+    key: "alice",
     name: "Alice Chen",
-    avatarUrl: "https://api.dicebear.com/7.x/avataars/svg?seed=Alice&backgroundColor=b6e3f4",
+    avatarUrl:
+      "https://api.dicebear.com/7.x/avataaars/svg?seed=Alice&backgroundColor=b6e3f4",
     clerkId: "demo_user_alice_001",
   },
   {
+    key: "bob",
     name: "Bob Martinez",
-    avatarUrl: "https://api.dicebear.com/7.x/avataars/svg?seed=Bob&backgroundColor=4caf50",
+    avatarUrl:
+      "https://api.dicebear.com/7.x/avataaars/svg?seed=Bob&backgroundColor=4caf50",
     clerkId: "demo_user_bob_002",
   },
   {
+    key: "charlie",
     name: "Charlie Kim",
-    avatarUrl: "https://api.dicebear.com/7.x/avataars/svg?seed=Charlie&backgroundColor=d1d5e8",
+    avatarUrl:
+      "https://api.dicebear.com/7.x/avataaars/svg?seed=Charlie&backgroundColor=d1d5e8",
     clerkId: "demo_user_charlie_003",
   },
-] as Array<{
-  name: string;
-  avatarUrl: string;
-  clerkId: string;
-}>;
+] as const;
 
-// Strategic echo locations with content
 const DEMO_ECHOES = [
-  // Central Park, NYC
   {
-    lat: 40.7829,
-    lng: -73.9654,
-    text: "Just walked through Central Park on a beautiful spring morning. The cherry blossoms are starting to bloom!",
-    creator: "Alice",
+    creatorKey: "alice",
+    lat: 37.7749,
+    lng: -122.4194,
+    text: "Kicking off the EchoMap demo from downtown San Francisco. The city feels alive tonight.",
   },
-  // Times Square, NYC
   {
-    lat: 40.7580,
-    lng: -73.9855,
-    text: "Standing in Times Square at night - the lights are incredible! Feeling like I'm in the heart of the city.",
-    creator: "Bob",
+    creatorKey: "bob",
+    lat: 37.7752,
+    lng: -122.4188,
+    text: "Just grabbed coffee nearby and found this corner buzzing with founders, tourists, and cyclists.",
   },
-  // Brooklyn Bridge, NYC
   {
-    lat: 40.7061,
-    lng: -73.9969,
-    text: "Walking across the Brooklyn Bridge at sunset. The Manhattan skyline looks amazing from here!",
-    creator: "Charlie",
+    creatorKey: "charlie",
+    lat: 37.7744,
+    lng: -122.4201,
+    text: "Fog is rolling in fast. It is the perfect soundtrack for a late-night walk through Market Street.",
   },
-  // Golden Gate Bridge, SF
   {
-    lat: 37.8199,
-    lng: -122.4783,
-    text: "Fog rolling in over the Golden Gate Bridge. Classic San Francisco morning!",
-    creator: "Alice",
+    creatorKey: "alice",
+    lat: 37.7756,
+    lng: -122.4199,
+    text: "If you are hearing this echo, you are right in the sweet spot of our geohash discovery radius.",
   },
-  // Fisherman's Wharf, SF
   {
-    lat: 37.8080,
-    lng: -122.4174,
-    text: "Sea lions barking at Pier 39! Such a fun tourist spot.",
-    creator: "Bob",
+    creatorKey: "bob",
+    lat: 37.7741,
+    lng: -122.4186,
+    text: "Testing the 500 meter proximity bubble. You should catch this one from farther out now.",
   },
-  // Pike Place Market, Seattle
   {
-    lat: 47.6097,
-    lng: -122.3422,
-    text: "Throwing fish at Pike Place! The salmon is so fresh here.",
-    creator: "Charlie",
+    creatorKey: "charlie",
+    lat: 37.7750,
+    lng: -122.4206,
+    text: "This is one of our seeded demo echoes, generated with Google Cloud TTS so the map never feels empty.",
   },
-  // Tower Bridge, London
   {
-    lat: 51.5055,
-    lng: -0.0754,
-    text: "Crossing the Tower Bridge with a view of the Thames. London is beautiful!",
-    creator: "Alice",
+    creatorKey: "alice",
+    lat: 37.7760,
+    lng: -122.4183,
+    text: "Imagine finding a hidden audio postcard like this while walking to your next event downtown.",
   },
-  // Shibuya Crossing, Tokyo
   {
-    lat: 35.6595,
-    lng: 139.7004,
-    text: "Crossed the famous Shibuya Crossing! The organized chaos is mesmerizing.",
-    creator: "Bob",
+    creatorKey: "bob",
+    lat: 37.7738,
+    lng: -122.4197,
+    text: "Drop your own echo nearby and you can compare the live recording flow against our seeded dataset.",
   },
-  // Sydney Opera House
   {
-    lat: -33.8568,
-    lng: 151.2153,
-    text: "Sitting by the Opera House watching the harbor. Sydney never disappoints!",
-    creator: "Charlie",
+    creatorKey: "charlie",
+    lat: 37.7754,
+    lng: -122.4179,
+    text: "Another seeded marker here to make the discovery cluster feel dense and intentional for the demo.",
   },
-] as Array<{
-  lat: number;
-  lng: number;
-  text: string;
-  creator: string;
-}>;
+  {
+    creatorKey: "alice",
+    lat: 37.7746,
+    lng: -122.4210,
+    text: "EchoMap turns physical space into a lightweight social layer. This seeded trail helps show the concept instantly.",
+  },
+] as const;
 
-/**
- * Seed the database with demo users and echoes.
- * Run this with: npx convex run convex/seed:seedData
- */
-export const seedData = internalMutation({
+export const hasSeedData = internalQuery({
   args: {},
   handler: async (ctx) => {
-    // Check if already seeded
     const existingUser = await ctx.db
       .query("users")
       .withIndex("by_clerk_id", (q) => q.eq("clerkId", "demo_user_alice_001"))
       .unique();
 
-    if (existingUser) {
-      console.log("Database already seeded - skipping");
-      return;
+    return existingUser !== null;
+  },
+});
+
+export const ensureDemoUser = internalMutation({
+  args: {
+    key: v.string(),
+    name: v.string(),
+    avatarUrl: v.string(),
+    clerkId: v.string(),
+  },
+  handler: async (ctx, { name, avatarUrl, clerkId }) => {
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", clerkId))
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { name, avatarUrl });
+      return existing._id;
     }
 
-    console.log("Seeding database with dummy data...");
+    return await ctx.db.insert("users", {
+      clerkId,
+      name,
+      avatarUrl,
+    });
+  },
+});
 
-    // Create demo users
+export const seedData = action({
+  args: {},
+  handler: async (ctx) => {
+    const alreadySeeded = await ctx.runQuery(internal.seed.hasSeedData, {});
+
+    if (alreadySeeded) {
+      return {
+        success: true,
+        skipped: true,
+        createdUsers: 0,
+        createdEchoes: 0,
+        failedEchoes: 0,
+      };
+    }
+
     const userIds: Record<string, Id<"users">> = {};
-    
+
     for (const user of DEMO_USERS) {
-      const userId = await ctx.db.insert("users", {
-        clerkId: user.clerkId,
-        name: user.name,
-        avatarUrl: user.avatarUrl,
-      });
-      userIds[user.clerkId] = userId;
-      console.log(`Created user: ${user.name}`);
+      userIds[user.key] = await ctx.runMutation(internal.seed.ensureDemoUser, user);
     }
 
-  }
-
-    // Create demo echoes with Google TTS
-    const now = Date.now();
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+    let createdEchoes = 0;
+    let failedEchoes = 0;
+    const failures: string[] = [];
 
     for (const echo of DEMO_ECHOES) {
-      const userId = userIds[`demo_user_${echo.creator.toLowerCase()}_001`];
-      
+      const userId = userIds[echo.creatorKey];
+
       if (!userId) {
-        console.error(`User not found for creator: ${echo.creator}`);
+        failedEchoes += 1;
+        failures.push(`Missing demo user for ${echo.creatorKey}`);
         continue;
       }
 
-      console.log(`Creating echo by ${echo.creator}...`);
-      console.log(`Text: "${echo.text}"`);
-
-      // Call the TTS action to generate audio
       try {
-        const result = await ctx.runAction(api.tts.generateAndCreateEcho, {
+        await ctx.runAction(internal.tts.generateAndCreateSeedEcho, {
           userId,
           lat: echo.lat,
           lng: echo.lng,
           text: echo.text,
         });
-
-        if (result.success) {
-          console.log(`✓ Echo created successfully`);
-        } else if (result.fallback) {
-          console.log(`⚠ Echo created with fallback: ${result.reason}`);
-        }
+        createdEchoes += 1;
       } catch (error) {
-        console.error(`Failed to create echo: ${error}`);
+        failedEchoes += 1;
+        failures.push(error instanceof Error ? error.message : String(error));
       }
     }
 
-    console.log("Seeding complete! Created 3 users and 10 echoes.");
-    return { success: true };
+    return {
+      success: failedEchoes === 0,
+      skipped: false,
+      createdUsers: DEMO_USERS.length,
+      createdEchoes,
+      failedEchoes,
+      failures,
+    };
   },
 });

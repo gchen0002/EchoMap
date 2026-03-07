@@ -8,17 +8,17 @@
  *
  * Algorithm:
  * 1. Encode (lat, lng) → Geohash string at precision 7 (~150m x 150m box)
- * 2. Compute the 8 neighboring Geohash boxes
- * 3. Query DB for all 9 Geohashes (self + 8 neighbors)
+ * 2. Build a bounding box around the discovery radius
+ * 3. Query every Geohash cell intersecting that box
  * 4. Refine results with exact Haversine distance filter
  */
 import ngeohash from "ngeohash";
 
-// Precision 7 ≈ 150m x 150m cells — ideal for "nearby" discovery
+// Precision 7 keeps cells small enough for smooth nearby discovery.
 const GEOHASH_PRECISION = 7;
 
 // Maximum radius in meters for an Echo to be "discoverable"
-export const DISCOVERY_RADIUS_METERS = 150;
+export const DISCOVERY_RADIUS_METERS = 500;
 
 /**
  * Encode latitude and longitude into a Geohash string.
@@ -28,15 +28,21 @@ export function encodeGeohash(lat: number, lng: number): string {
 }
 
 /**
- * Given a user's position, return the 9 Geohash strings (self + 8 neighbors)
- * required to query for all nearby Echoes without missing any at cell edges.
+ * Given a user's position, return every geohash cell that intersects the
+ * discovery radius bounding box so larger radii still include all candidates.
  */
 export function getQueryGeohashes(lat: number, lng: number): string[] {
-  const center = encodeGeohash(lat, lng);
-  const neighbors = ngeohash.neighbors(center);
+  const latDelta = DISCOVERY_RADIUS_METERS / 111_320;
+  const safeCosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+  const lngDelta = DISCOVERY_RADIUS_METERS / (111_320 * safeCosLat);
+  const minLat = lat - latDelta;
+  const maxLat = lat + latDelta;
+  const minLng = lng - lngDelta;
+  const maxLng = lng + lngDelta;
 
-  // neighbors returns [n, ne, e, se, s, sw, w, nw]
-  return [center, ...neighbors];
+  return Array.from(
+    new Set(ngeohash.bboxes(minLat, minLng, maxLat, maxLng, GEOHASH_PRECISION))
+  );
 }
 
 /**

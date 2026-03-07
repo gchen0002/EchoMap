@@ -5,6 +5,7 @@ import Map, {
   Marker,
   NavigationControl,
   MapRef,
+  type MapMouseEvent,
   type MarkerEvent,
 } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -12,6 +13,7 @@ import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
 import DropEchoModal from "./DropEchoModal";
+import { DISCOVERY_RADIUS_METERS } from "../../lib/geohash";
 
 interface EchoMarker {
   _id: string;
@@ -31,7 +33,8 @@ interface UserPosition {
   lng: number;
 }
 
-const DISCOVERY_RADIUS_LABEL = "150m";
+const DISCOVERY_RADIUS_LABEL = `${DISCOVERY_RADIUS_METERS}m`;
+const LOCATION_OVERRIDE_CLERK_ID = "user_3Aaz1EqZth7kGlOfFLZ6BLSJ6oO";
 
 type GeoErrorType = "permission" | "timeout" | "unavailable" | null;
 
@@ -45,6 +48,8 @@ export default function EchoMap() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [isTeleportModeEnabled, setIsTeleportModeEnabled] = useState(false);
+  const [teleportPulse, setTeleportPulse] = useState<{ lat: number; lng: number } | null>(null);
   const [upsertError, setUpsertError] = useState<Error | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
@@ -68,6 +73,8 @@ export default function EchoMap() {
   const echoMarkers = (nearbyEchoes ?? []).filter(
     (echo) => Number.isFinite(echo.lat) && Number.isFinite(echo.lng)
   );
+  const canOverrideLocation = user?.id === LOCATION_OVERRIDE_CLERK_ID;
+  const isTeleportModeActive = canOverrideLocation && isTeleportModeEnabled;
 
   const canDropEcho = Boolean(
     isSignedIn && isConvexAuthenticated && userPosition && currentUser
@@ -155,6 +162,11 @@ export default function EchoMap() {
   }, []);
 
   const locateUser = useCallback(() => {
+    if (isTeleportModeActive && userPosition) {
+      centerMapOnUser(userPosition.lng, userPosition.lat);
+      return;
+    }
+
     if (userPosition) {
       centerMapOnUser(userPosition.lng, userPosition.lat);
     }
@@ -182,9 +194,20 @@ export default function EchoMap() {
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-  }, [applyPosition, centerMapOnUser, handleGeoError, hasGeolocation, userPosition]);
+  }, [
+    applyPosition,
+    centerMapOnUser,
+    handleGeoError,
+    hasGeolocation,
+    isTeleportModeActive,
+    userPosition,
+  ]);
 
   useEffect(() => {
+    if (isTeleportModeActive) {
+      return;
+    }
+
     if (!hasGeolocation) return;
 
     let mounted = true;
@@ -205,7 +228,60 @@ export default function EchoMap() {
       mounted = false;
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [applyPosition, handleGeoError, hasGeolocation]);
+  }, [applyPosition, handleGeoError, hasGeolocation, isTeleportModeActive]);
+
+  useEffect(() => {
+    if (!teleportPulse) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setTeleportPulse(null);
+    }, 1200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [teleportPulse]);
+
+  const moveOverrideLocation = useCallback(
+    (lng: number, lat: number) => {
+      setGeoError(null);
+      setUserPosition({ lat, lng });
+      setTeleportPulse({ lat, lng });
+      centerMapOnUser(lng, lat);
+    },
+    [centerMapOnUser]
+  );
+
+  const handleMapClick = useCallback(
+    (event: MapMouseEvent) => {
+      setSelectedEcho(null);
+
+      if (!isTeleportModeActive) {
+        return;
+      }
+
+      moveOverrideLocation(event.lngLat.lng, event.lngLat.lat);
+    },
+    [isTeleportModeActive, moveOverrideLocation]
+  );
+
+  const toggleTeleportMode = useCallback(() => {
+    if (!canOverrideLocation) {
+      return;
+    }
+
+    setIsTeleportModeEnabled((current) => {
+      const next = !current;
+
+      if (next && userPosition === null) {
+        setUserPosition({ lat: 37.7749, lng: -122.4194 });
+      }
+
+      return next;
+    });
+    setTeleportPulse(null);
+  }, [canOverrideLocation, userPosition]);
+
 
   const displayGeoError = !hasGeolocation ? "unavailable" as const : geoError;
 
@@ -307,6 +383,10 @@ export default function EchoMap() {
       ? `Account error: ${upsertError.message}`
     : isConvexAuthLoading
       ? "Connecting your account."
+    : isTeleportModeActive
+      ? "Admin mode: click anywhere on the map to move your location instantly."
+    : canOverrideLocation
+      ? "Teleport mode is available for this account."
     : displayGeoError === "permission"
       ? "Allow location access in your browser settings."
     : displayGeoError
@@ -343,7 +423,7 @@ export default function EchoMap() {
         }}
         style={{ width: "100%", height: "100%" }}
         mapStyle="mapbox://styles/mapbox/dark-v11"
-        onClick={() => setSelectedEcho(null)}
+        onClick={handleMapClick}
         onLoad={() => setIsMapReady(true)}
       >
         <NavigationControl position="top-right" />
@@ -351,6 +431,15 @@ export default function EchoMap() {
         {userPosition && (
           <Marker latitude={userPosition.lat} longitude={userPosition.lng}>
             <div className="h-4 w-4 rounded-full border-2 border-white bg-[#8ea26f]" />
+          </Marker>
+        )}
+
+        {teleportPulse && (
+          <Marker latitude={teleportPulse.lat} longitude={teleportPulse.lng}>
+            <div className="pointer-events-none flex h-16 w-16 items-center justify-center">
+              <div className="absolute h-14 w-14 rounded-full border border-[#dce6cc]/40 bg-[#dce6cc]/10 animate-ping" />
+              <div className="h-4 w-4 rounded-full border-2 border-[#f3f3ef] bg-[#dce6cc] shadow-[0_0_20px_rgba(220,230,204,0.45)]" />
+            </div>
           </Marker>
         )}
 
@@ -385,6 +474,19 @@ export default function EchoMap() {
           </div>
 
           <div className="flex items-center gap-2">
+            {canOverrideLocation && (
+              <button
+                type="button"
+                onClick={toggleTeleportMode}
+                className={`hidden rounded-[8px] border px-3 py-2 text-xs transition-colors md:block ${
+                  isTeleportModeActive
+                    ? "border-[#8ea26f] bg-[#23281f] text-[#dce6cc] hover:bg-[#283022]"
+                    : "border-[#3a3d3e] bg-[#202324] text-[#b7bbb4] hover:bg-[#26292a]"
+                }`}
+              >
+                {isTeleportModeActive ? "Teleport mode on" : "Teleport mode off"}
+              </button>
+            )}
             <button
               type="button"
               onClick={locateUser}
@@ -565,6 +667,15 @@ export default function EchoMap() {
                 {userPosition.lat.toFixed(3)}, {userPosition.lng.toFixed(3)}
               </div>
             )}
+            {isTeleportModeActive ? (
+              <div className="mt-1 text-xs text-[#8ea26f]">
+                Click the map to teleport and test echoes anywhere.
+              </div>
+            ) : canOverrideLocation ? (
+              <div className="mt-1 text-xs text-[#8f948b]">
+                Turn on teleport mode to move your location by clicking the map.
+              </div>
+            ) : null}
           </div>
 
           <button

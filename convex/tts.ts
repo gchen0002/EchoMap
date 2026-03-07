@@ -2,7 +2,7 @@
 
 import { createSign } from "node:crypto";
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
@@ -378,6 +378,145 @@ export const generateAndCreateEcho = action({
         { userId, lat, lng, text },
         error instanceof Error ? error.message : "unexpected_error"
       );
+    } finally {
+      if (!reservationConsumed) {
+        await ctx.runMutation(internal.ttsUsage.finishReservation, {
+          requestId,
+          consumed: false,
+        });
+      }
+    }
+  },
+});
+
+export const generateAndCreateSeedEcho = internalAction({
+  args: {
+    userId: v.id("users"),
+    lat: v.number(),
+    lng: v.number(),
+    text: v.string(),
+  },
+  handler: async (ctx, { userId, lat, lng, text }): Promise<TtsResult> => {
+    const rawCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+    if (!rawCredentials) {
+      throw new Error("GOOGLE_APPLICATION_CREDENTIALS_JSON is not configured");
+    }
+
+    const now = Date.now();
+    const period = getCurrentUsagePeriod(now);
+    const requestId = createReservationId(userId, text, now);
+    const quotaReservation: QuotaReservationResult = await ctx.runMutation(
+      internal.ttsUsage.reserveMonthlyQuota,
+      {
+        period,
+        requestId,
+        characters: text.length,
+        limit: MONTHLY_CHARACTER_LIMIT,
+        expiresAt: now + RESERVATION_TIMEOUT_MS,
+      }
+    );
+
+    if (!quotaReservation.allowed) {
+      throw new Error(quotaReservation.reason ?? "monthly_quota_exceeded");
+    }
+
+    let reservationConsumed = false;
+
+    try {
+      const credentials = parseServiceAccount(rawCredentials);
+      const accessToken = await getGoogleAccessToken(credentials);
+
+      const response = await fetch(SYNTHESIZE_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          input: { text },
+          voice: {
+            languageCode: LANGUAGE_CODE,
+            name: VOICE_NAME,
+            ssmlGender: "MALE",
+          },
+          audioConfig: {
+            audioEncoding: "MP3",
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let parsedError: GoogleTtsErrorResponse = {};
+
+        try {
+          parsedError = JSON.parse(errorText) as GoogleTtsErrorResponse;
+        } catch {
+          parsedError = {};
+        }
+
+        const errorDetails = parseGoogleTtsError(parsedError, errorText);
+        console.error("[Google Cloud TTS seed failed]", {
+          statusCode: response.status,
+          errorStatus: errorDetails.status,
+          errorCode: errorDetails.code,
+          errorMessage: errorDetails.message,
+          rawError: errorText,
+          voiceName: VOICE_NAME,
+          languageCode: LANGUAGE_CODE,
+          textPreview: text.slice(0, 80),
+        });
+
+        throw new Error(
+          `Google Cloud TTS error [${errorDetails.status ?? response.status}]: ${errorDetails.message}`
+        );
+      }
+
+      const synthPayload = (await response.json()) as GoogleTtsSuccessResponse;
+      if (!synthPayload.audioContent) {
+        throw new Error("Google Cloud TTS returned no audio content");
+      }
+
+      const audioBuffer = Buffer.from(synthPayload.audioContent, "base64");
+      const uploadUrl = await ctx.runMutation(internal.echoes.generateUploadUrlInternal, {});
+      const uploadResponse = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": "audio/mpeg" },
+        body: audioBuffer,
+      });
+
+      if (!uploadResponse.ok) {
+        const uploadErrorText = await uploadResponse.text();
+        throw new Error(
+          `Convex storage upload failed: ${uploadResponse.status} - ${uploadErrorText}`
+        );
+      }
+
+      const { storageId } = (await uploadResponse.json()) as {
+        storageId: string;
+      };
+
+      await ctx.runMutation(internal.echoes.createEchoInternal, {
+        userId,
+        lat,
+        lng,
+        audioStorageId: storageId as Id<"_storage">,
+        text,
+        isAiGenerated: true,
+      });
+
+      await ctx.runMutation(internal.ttsUsage.finishReservation, {
+        requestId,
+        consumed: true,
+      });
+      reservationConsumed = true;
+
+      console.info("[Google Cloud TTS seed succeeded]", {
+        voiceName: VOICE_NAME,
+        textLength: text.length,
+      });
+
+      return { success: true };
     } finally {
       if (!reservationConsumed) {
         await ctx.runMutation(internal.ttsUsage.finishReservation, {

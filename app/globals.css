@@ -1,26 +1,69 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #121314;
+  --foreground: #f3f3ef;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #121314;
+    --foreground: #f3f3ef;
   }
+}
+
+html,
+body {
+  min-height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), sans-serif;
+}
+
+.echomap-shell .mapboxgl-ctrl-top-right {
+  top: 4.5rem;
+  right: 1rem;
+}
+
+.echomap-shell .mapboxgl-ctrl-group {
+  overflow: hidden;
+  border: 1px solid #2b2e2f;
+  border-radius: 8px;
+  background: rgba(26, 28, 29, 0.96);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.echomap-shell .mapboxgl-ctrl-group button {
+  width: 42px;
+  height: 42px;
+  background: transparent;
+}
+
+.echomap-shell .mapboxgl-ctrl-group button + button {
+  border-top: 1px solid #2b2e2f;
+}
+
+.echomap-shell .mapboxgl-ctrl-group button span {
+  filter: invert(0.95);
+}
+
+.echomap-shell .mapboxgl-ctrl-group button:hover {
+  background: #232627;
+}
+
+@media (max-width: 640px) {
+  .echomap-shell .mapboxgl-ctrl-top-right {
+    top: 4.5rem;
+    right: 0.75rem;
+  }
 }

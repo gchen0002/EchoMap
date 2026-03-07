@@ -13,7 +13,7 @@ export default defineSchema({
     lat: v.number(),
     lng: v.number(),
     geohash: v.string(),
-    audioStorageId: v.id("_storage"),
+    audioStorageId: v.optional(v.id("_storage")),
     text: v.optional(v.string()),
     isAiGenerated: v.boolean(),
     createdAt: v.number(),

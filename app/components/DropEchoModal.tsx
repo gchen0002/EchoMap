@@ -23,8 +23,7 @@ export default function DropEchoModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   
-  // We'll use the ElevenLabs action right now
-  const generateAndCreateEcho = useAction(api.elevenlabs.generateAndCreateEcho);
+  const generateAndCreateEcho = useAction(api.tts.generateAndCreateEcho);
 
   if (!isOpen || !userPosition || !userId) return null;
 
@@ -46,8 +45,14 @@ export default function DropEchoModal({
     } catch (error) {
       console.error("Failed to drop echo:", error);
       if (error instanceof Error) {
-        if (error.message.includes("ELEVENLABS_API_KEY")) {
-          setSubmitError("ElevenLabs is not configured yet.");
+        if (error.message.includes("GOOGLE_APPLICATION_CREDENTIALS_JSON")) {
+          setSubmitError("Google Cloud TTS is not configured yet.");
+        } else if (error.message.includes("PERMISSION_DENIED")) {
+          setSubmitError("Google Cloud TTS permission denied. Check your service account roles.");
+        } else if (error.message.includes("RESOURCE_EXHAUSTED")) {
+          setSubmitError("Google Cloud TTS quota was exceeded.");
+        } else if (error.message.includes("invalid_grant")) {
+          setSubmitError("Google Cloud credentials are invalid or expired.");
         } else {
           setSubmitError(error.message);
         }
@@ -104,7 +109,7 @@ export default function DropEchoModal({
                 {text.length}/200 characters
               </span>
               <span className="text-xs text-purple-400 bg-purple-400/10 px-2 py-1 rounded-md">
-                ✨ Powered by ElevenLabs
+                ✨ Powered by Google Cloud TTS
               </span>
             </div>
 

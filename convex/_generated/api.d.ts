@@ -11,7 +11,7 @@
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as echoes from "../echoes.js";
-import type * as elevenlabs from "../elevenlabs.js";
+import type * as tts from "../tts.js";
 import type * as users from "../users.js";
 
 import type {
@@ -24,7 +24,7 @@ declare const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
   crons: typeof crons;
   echoes: typeof echoes;
-  elevenlabs: typeof elevenlabs;
+  tts: typeof tts;
   users: typeof users;
 }>;
 

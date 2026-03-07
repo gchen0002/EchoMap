@@ -15,21 +15,8 @@ function useUseAuthFromClerk() {
 
         const fetchAccessToken = useCallback(
           async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
-            let templateToken: string | null = null;
-
-            try {
-              templateToken = await getToken({
-                template: "convex",
-                skipCache: forceRefreshToken,
-              });
-            } catch (error) {
-              if (process.env.NODE_ENV === "development") {
-                console.warn("Failed to fetch Clerk convex template token", error);
-              }
-            }
-
-            if (templateToken) {
-              return templateToken;
+            if (typeof navigator !== "undefined" && navigator.onLine === false) {
+              return null;
             }
 
             try {
@@ -38,7 +25,17 @@ function useUseAuthFromClerk() {
               });
             } catch (error) {
               if (process.env.NODE_ENV === "development") {
-                console.warn("Failed to fetch Clerk session token for Convex", error);
+                const clerkCode =
+                  typeof error === "object" &&
+                  error !== null &&
+                  "code" in error &&
+                  typeof error.code === "string"
+                    ? error.code
+                    : null;
+
+                if (clerkCode !== "clerk_offline") {
+                  console.warn("Failed to fetch Clerk session token for Convex", error);
+                }
               }
               return null;
             }

@@ -69,7 +69,9 @@ export const getNearbyEchoes = query({
     const enriched = await Promise.all(
       nearbyEchoes.map(async (echo) => {
         const user = await ctx.db.get(echo.userId);
-        const audioUrl = await ctx.storage.getUrl(echo.audioStorageId);
+        const audioUrl = echo.audioStorageId
+          ? await ctx.storage.getUrl(echo.audioStorageId)
+          : null;
         const distance = haversineDistance(userLat, userLng, echo.lat, echo.lng);
 
         return {
@@ -98,7 +100,7 @@ export const createEcho = mutation({
     userId: v.id("users"),
     lat: v.number(),
     lng: v.number(),
-    audioStorageId: v.id("_storage"),
+    audioStorageId: v.optional(v.id("_storage")),
     text: v.optional(v.string()),
     isAiGenerated: v.boolean(),
   },
@@ -129,7 +131,7 @@ export const createEcho = mutation({
 });
 
 /**
- * Generate an upload URL for audio files (native recordings or ElevenLabs output).
+ * Generate an upload URL for audio files (native recordings or Google TTS output).
  */
 export const generateUploadUrl = mutation({
   handler: async (ctx) => {

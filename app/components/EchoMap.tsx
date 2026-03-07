@@ -10,7 +10,7 @@ import Map, {
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { useUser, UserButton, SignInButton, useAuth } from "@clerk/nextjs";
+import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
 import DropEchoModal from "./DropEchoModal";
 
 interface EchoMarker {
@@ -37,6 +37,7 @@ type GeoErrorType = "permission" | "timeout" | "unavailable" | null;
 
 export default function EchoMap() {
   const mapRef = useRef<MapRef>(null);
+  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [geoError, setGeoError] = useState<GeoErrorType>(null);
   const [selectedEcho, setSelectedEcho] = useState<EchoMarker | null>(null);
@@ -49,7 +50,6 @@ export default function EchoMap() {
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
 
   const { user, isSignedIn } = useUser();
-  const { getToken } = useAuth();
   const { isAuthenticated: isConvexAuthenticated, isLoading: isConvexAuthLoading } =
     useConvexAuth();
   const upsertUser = useMutation(api.users.upsertUser);
@@ -57,11 +57,6 @@ export default function EchoMap() {
     api.users.getCurrentUser,
     isSignedIn && isConvexAuthenticated ? {} : "skip"
   );
-  const debugAuth = useQuery(
-    api.users.debugAuth,
-    isSignedIn ? {} : "skip"
-  );
-  const debugUnauthed = useQuery(api.users.debugUnauthed, {});
 
   const nearbyEchoes = useQuery(
     api.echoes.getNearbyEchoes,
@@ -112,38 +107,6 @@ export default function EchoMap() {
       cancelled = true;
     };
   }, [currentUser, isConvexAuthenticated, isSignedIn, upsertUser, user]);
-
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development" || !isSignedIn) {
-      return;
-    }
-
-    void (async () => {
-      let templateToken: string | null = null;
-
-      try {
-        templateToken = await getToken({ template: "convex" });
-      } catch (error) {
-        console.log("[EchoMap auth probe template error]", error);
-      }
-
-      let sessionToken: string | null = null;
-
-      try {
-        sessionToken = await getToken();
-      } catch (error) {
-        console.log("[EchoMap auth probe session error]", error);
-      }
-
-      console.log("[EchoMap auth probe]", {
-        hasTemplateToken: Boolean(templateToken),
-        hasSessionToken: Boolean(sessionToken),
-        convexAuthenticated: isConvexAuthenticated,
-        convexAuthLoading: isConvexAuthLoading,
-        debugUnauthed,
-      });
-    })();
-  }, [debugUnauthed, getToken, isConvexAuthLoading, isConvexAuthenticated, isSignedIn]);
 
   const hasGeolocation =
     typeof navigator !== "undefined" && "geolocation" in navigator;
@@ -246,9 +209,27 @@ export default function EchoMap() {
 
   const displayGeoError = !hasGeolocation ? "unavailable" as const : geoError;
 
+  const stopPlayback = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    if (typeof window !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+
+    speechSynthesisRef.current = null;
+    setIsPlaying(false);
+  }, []);
+
   const playAudio = useCallback((url: string) => {
     if (audioRef.current) {
       audioRef.current.pause();
+    }
+
+    if (typeof window !== "undefined") {
+      window.speechSynthesis.cancel();
     }
 
     const audio = new Audio(url);
@@ -263,6 +244,37 @@ export default function EchoMap() {
       setIsPlaying(false);
     });
   }, []);
+
+  const speakText = useCallback((text: string) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return false;
+    }
+
+    stopPlayback();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.onend = () => {
+      speechSynthesisRef.current = null;
+      setIsPlaying(false);
+    };
+    utterance.onerror = () => {
+      speechSynthesisRef.current = null;
+      setIsPlaying(false);
+    };
+
+    speechSynthesisRef.current = utterance;
+    setIsPlaying(true);
+    window.speechSynthesis.speak(utterance);
+    return true;
+  }, [stopPlayback]);
+
+  useEffect(() => {
+    return () => {
+      stopPlayback();
+    };
+  }, [stopPlayback]);
 
   const formatTimestamp = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], {
@@ -295,12 +307,6 @@ export default function EchoMap() {
       ? `Account error: ${upsertError.message}`
     : isConvexAuthLoading
       ? "Connecting your account."
-    : !debugAuth
-      ? "Convex auth not established yet"
-    : debugAuth && !debugAuth.authenticated
-      ? `Auth debug: ${debugAuth.error}`
-    : debugUnauthed && !debugUnauthed.authenticated
-      ? "Convex debug: backend sees no token"
     : displayGeoError === "permission"
       ? "Allow location access in your browser settings."
     : displayGeoError
@@ -450,6 +456,17 @@ export default function EchoMap() {
                     className="rounded-[8px] bg-[#8ea26f] px-3 py-2 text-sm font-medium text-[#121314] transition-colors hover:bg-[#9aae7d]"
                   >
                     {isPlaying ? "Playing" : "Play"}
+                  </button>
+                ) : selectedEcho.text ? (
+                  <button
+                    onClick={() => {
+                      if (!speakText(selectedEcho.text!)) {
+                        setSelectedEcho(selectedEcho);
+                      }
+                    }}
+                    className="rounded-[8px] bg-[#8ea26f] px-3 py-2 text-sm font-medium text-[#121314] transition-colors hover:bg-[#9aae7d]"
+                  >
+                    {isPlaying ? "Speaking" : "Speak"}
                   </button>
                 ) : (
                   <span className="text-xs text-[#8f948b]">Audio unavailable</span>

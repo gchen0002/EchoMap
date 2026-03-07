@@ -15,7 +15,9 @@ export const deleteExpiredEchoes = internalMutation({
 
     for (const echo of expired) {
       // Delete the stored audio file
-      await ctx.storage.delete(echo.audioStorageId);
+      if (echo.audioStorageId) {
+        await ctx.storage.delete(echo.audioStorageId);
+      }
       // Delete the echo document
       await ctx.db.delete(echo._id);
     }

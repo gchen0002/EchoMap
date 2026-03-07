@@ -35,9 +35,12 @@ interface UserPosition {
 
 const DISCOVERY_RADIUS_LABEL = "150m";
 
+type GeoErrorType = "permission" | "timeout" | "unavailable" | null;
+
 export default function EchoMap() {
   const mapRef = useRef<MapRef>(null);
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
+  const [geoError, setGeoError] = useState<GeoErrorType>(null);
   const [selectedEcho, setSelectedEcho] = useState<EchoMarker | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -76,22 +79,45 @@ export default function EchoMap() {
     }
   }, [isSignedIn, user, upsertUser]);
 
+  const hasGeolocation = Boolean(navigator.geolocation);
+
   useEffect(() => {
-    if (!navigator.geolocation) return;
+    if (!hasGeolocation) return;
+
+    let mounted = true;
+
+    const handleGeoError = (err: GeolocationPositionError) => {
+      if (!mounted) return;
+      console.error("Geolocation error:", err);
+      if (err.code === err.PERMISSION_DENIED) {
+        setGeoError("permission");
+      } else if (err.code === err.TIMEOUT) {
+        setGeoError("timeout");
+      } else {
+        setGeoError("unavailable");
+      }
+    };
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
+        if (!mounted) return;
+        setGeoError(null);
         setUserPosition({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
         });
       },
-      (err) => console.error("Geolocation error:", err),
-      { enableHighAccuracy: true, maximumAge: 5000 }
+      handleGeoError,
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+    return () => {
+      mounted = false;
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [hasGeolocation]);
+
+  const displayGeoError = !hasGeolocation ? "unavailable" as const : geoError;
 
   const playAudio = useCallback((url: string) => {
     if (audioRef.current) {
@@ -118,21 +144,31 @@ export default function EchoMap() {
     });
   };
 
-  const mapStatus = !userPosition
-    ? "Waiting for location permission"
-    : isLoadingEchoes
-      ? "Looking for nearby echoes"
-      : echoMarkers.length === 0
-        ? "No echoes nearby"
-        : `${echoMarkers.length} ${echoMarkers.length === 1 ? "echo" : "echoes"} nearby`;
+  const mapStatus = displayGeoError === "permission"
+    ? "Location permission denied"
+    : displayGeoError === "timeout"
+      ? "Location timeout - try again"
+      : displayGeoError === "unavailable"
+        ? "Location unavailable"
+        : !userPosition
+          ? "Waiting for location..."
+          : isLoadingEchoes
+            ? "Looking for nearby echoes"
+            : echoMarkers.length === 0
+              ? "No echoes nearby"
+              : `${echoMarkers.length} ${echoMarkers.length === 1 ? "echo" : "echoes"} nearby`;
 
   const dropEchoHint = !isSignedIn
     ? "Sign in to leave an echo."
-    : !userPosition
-      ? "Enable location to drop an echo."
-      : !currentUser
-        ? "Syncing your account."
-        : `People within ${DISCOVERY_RADIUS_LABEL} can hear your echo for 24 hours.`;
+    : displayGeoError === "permission"
+      ? "Allow location access in your browser settings."
+      : displayGeoError
+        ? "Location unavailable. Try refreshing the page."
+        : !userPosition
+          ? "Enable location to drop an echo."
+          : !currentUser
+            ? "Syncing your account."
+            : `People within ${DISCOVERY_RADIUS_LABEL} can hear your echo for 24 hours.`;
 
   if (!mapboxToken) {
     return (
@@ -288,9 +324,25 @@ export default function EchoMap() {
               </div>
 
               {!userPosition ? (
-                <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
-                  Allow location access to see echoes around you.
-                </p>
+                displayGeoError === "permission" ? (
+                  <p className="px-4 py-4 text-sm leading-6 text-[#e8a26f]">
+                    Location permission denied. Enable it in your browser settings.
+                  </p>
+                ) : displayGeoError === "timeout" ? (
+                  <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
+                    Location request timed out. Please try again.
+                  </p>
+                ) : displayGeoError === "unavailable" ? (
+                  <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
+                    Location unavailable on this device.
+                  </p>
+                ) : (
+                  <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
+                    {isSignedIn
+                      ? "Sign in, then enable location to drop an echo."
+                      : "Enable location to see echoes around you."}
+                  </p>
+                )
               ) : isLoadingEchoes ? (
                 <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
                   Looking for echoes nearby.

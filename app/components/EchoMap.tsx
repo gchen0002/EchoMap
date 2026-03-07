@@ -14,6 +14,7 @@ import { api } from "../../convex/_generated/api";
 import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
 import DropEchoModal from "./DropEchoModal";
 import { DISCOVERY_RADIUS_METERS } from "../../lib/geohash";
+import { shouldRequestPreciseLocation } from "./echoMapLocation";
 
 interface EchoMarker {
   _id: string;
@@ -162,13 +163,15 @@ export default function EchoMap() {
   }, []);
 
   const locateUser = useCallback(() => {
-    if (isTeleportModeActive && userPosition) {
-      centerMapOnUser(userPosition.lng, userPosition.lat);
-      return;
-    }
-
     if (userPosition) {
       centerMapOnUser(userPosition.lng, userPosition.lat);
+      if (!shouldRequestPreciseLocation({
+        hasUserPosition: true,
+        isTeleportModeActive,
+      })) {
+        setIsLocating(false);
+        return;
+      }
     }
 
     if (!hasGeolocation) {

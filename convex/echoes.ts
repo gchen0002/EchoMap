@@ -7,6 +7,16 @@ import {
   DISCOVERY_RADIUS_METERS,
 } from "../lib/geohash";
 
+async function requireIdentity(ctx: { auth: { getUserIdentity(): Promise<{ subject: string } | null> } }) {
+  const identity = await ctx.auth.getUserIdentity();
+
+  if (!identity) {
+    throw new Error("Not authenticated");
+  }
+
+  return identity;
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────
 
 /**
@@ -93,6 +103,13 @@ export const createEcho = mutation({
     isAiGenerated: v.boolean(),
   },
   handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    const user = await ctx.db.get(args.userId);
+
+    if (!user || user.clerkId !== identity.subject) {
+      throw new Error("Unauthorized");
+    }
+
     const geohash = encodeGeohash(args.lat, args.lng);
     const now = Date.now();
     const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
@@ -116,6 +133,7 @@ export const createEcho = mutation({
  */
 export const generateUploadUrl = mutation({
   handler: async (ctx) => {
+    await requireIdentity(ctx);
     return await ctx.storage.generateUploadUrl();
   },
 });

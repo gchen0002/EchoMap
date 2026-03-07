@@ -8,7 +8,7 @@ import Map, {
   type MarkerEvent,
 } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
 import DropEchoModal from "./DropEchoModal";
@@ -37,21 +37,23 @@ type GeoErrorType = "permission" | "timeout" | "unavailable" | null;
 
 export default function EchoMap() {
   const mapRef = useRef<MapRef>(null);
-  const hasAutoCenteredRef = useRef(false);
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [geoError, setGeoError] = useState<GeoErrorType>(null);
   const [selectedEcho, setSelectedEcho] = useState<EchoMarker | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
 
   const { user, isSignedIn } = useUser();
+  const { isAuthenticated: isConvexAuthenticated, isLoading: isConvexAuthLoading } =
+    useConvexAuth();
   const upsertUser = useMutation(api.users.upsertUser);
   const currentUser = useQuery(
     api.users.getByClerkId,
-    isSignedIn && user ? { clerkId: user.id } : "skip"
+    isSignedIn && user && isConvexAuthenticated ? { clerkId: user.id } : "skip"
   );
 
   const nearbyEchoes = useQuery(
@@ -70,14 +72,13 @@ export default function EchoMap() {
   const nearbyPreview = echoMarkers.slice(0, 4);
 
   useEffect(() => {
-    if (isSignedIn && user) {
+    if (isSignedIn && user && isConvexAuthenticated) {
       void upsertUser({
-        clerkId: user.id,
         name: user.fullName || user.username || "Anonymous",
         avatarUrl: user.imageUrl,
       });
     }
-  }, [isSignedIn, user, upsertUser]);
+  }, [isConvexAuthenticated, isSignedIn, upsertUser, user]);
 
   const hasGeolocation =
     typeof navigator !== "undefined" && "geolocation" in navigator;
@@ -85,7 +86,7 @@ export default function EchoMap() {
   const centerMapOnUser = useCallback((lng: number, lat: number) => {
     const map = mapRef.current;
 
-    if (!map) return;
+    if (!map || !isMapReady) return false;
 
     map.flyTo({
       center: [lng, lat],
@@ -93,7 +94,9 @@ export default function EchoMap() {
       essential: true,
       duration: 900,
     });
-  }, []);
+
+    return true;
+  }, [isMapReady]);
 
   const applyPosition = useCallback(
     (coords: Pick<GeolocationCoordinates, "latitude" | "longitude">, shouldCenter = false) => {
@@ -107,7 +110,6 @@ export default function EchoMap() {
       setUserPosition(nextPosition);
 
       if (shouldCenter) {
-        hasAutoCenteredRef.current = true;
         centerMapOnUser(nextPosition.lng, nextPosition.lat);
       }
     },
@@ -115,8 +117,6 @@ export default function EchoMap() {
   );
 
   const handleGeoError = useCallback((err: GeolocationPositionError) => {
-    console.error("Geolocation error:", err);
-
     if (err.code === err.PERMISSION_DENIED) {
       setGeoError("permission");
     } else if (err.code === err.TIMEOUT) {
@@ -127,12 +127,18 @@ export default function EchoMap() {
   }, []);
 
   const locateUser = useCallback(() => {
+    if (userPosition) {
+      centerMapOnUser(userPosition.lng, userPosition.lat);
+    }
+
     if (!hasGeolocation) {
       setGeoError("unavailable");
       return;
     }
 
     setIsLocating(true);
+
+    const hasKnownPosition = Boolean(userPosition);
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -141,11 +147,14 @@ export default function EchoMap() {
       },
       (err) => {
         setIsLocating(false);
-        handleGeoError(err);
+
+        if (!hasKnownPosition) {
+          handleGeoError(err);
+        }
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-  }, [applyPosition, handleGeoError, hasGeolocation]);
+  }, [applyPosition, centerMapOnUser, handleGeoError, hasGeolocation, userPosition]);
 
   useEffect(() => {
     if (!hasGeolocation) return;
@@ -169,13 +178,6 @@ export default function EchoMap() {
       navigator.geolocation.clearWatch(watchId);
     };
   }, [applyPosition, handleGeoError, hasGeolocation]);
-
-  useEffect(() => {
-    if (!userPosition || hasAutoCenteredRef.current) return;
-
-    hasAutoCenteredRef.current = true;
-    centerMapOnUser(userPosition.lng, userPosition.lat);
-  }, [centerMapOnUser, userPosition]);
 
   const displayGeoError = !hasGeolocation ? "unavailable" as const : geoError;
 
@@ -212,6 +214,8 @@ export default function EchoMap() {
         ? "Location unavailable"
         : isLocating
           ? "Finding your location"
+        : isSignedIn && isConvexAuthLoading
+          ? "Connecting account..."
         : !userPosition
           ? "Waiting for location..."
           : isLoadingEchoes
@@ -222,6 +226,8 @@ export default function EchoMap() {
 
   const dropEchoHint = !isSignedIn
     ? "Sign in to leave an echo."
+    : isConvexAuthLoading
+      ? "Connecting your account."
     : displayGeoError === "permission"
       ? "Allow location access in your browser settings."
       : displayGeoError
@@ -259,6 +265,7 @@ export default function EchoMap() {
         style={{ width: "100%", height: "100%" }}
         mapStyle="mapbox://styles/mapbox/dark-v11"
         onClick={() => setSelectedEcho(null)}
+        onLoad={() => setIsMapReady(true)}
       >
         <NavigationControl position="top-right" />
 

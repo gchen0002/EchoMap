@@ -22,6 +22,12 @@ export const generateAndCreateEcho = action({
     text: v.string(),
   },
   handler: async (ctx, { userId, lat, lng, text }) => {
+    const identity = await ctx.auth.getUserIdentity();
+
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
     const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
     if (!ELEVENLABS_API_KEY) {
       throw new Error("ELEVENLABS_API_KEY is not configured");

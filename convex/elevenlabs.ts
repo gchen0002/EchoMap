@@ -3,6 +3,7 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 /**
  * ElevenLabs Text-to-Speech Action
@@ -75,7 +76,7 @@ export const generateAndCreateEcho = action({
       userId,
       lat,
       lng,
-      audioStorageId: storageId as any,
+      audioStorageId: storageId as Id<"_storage">,
       text,
       isAiGenerated: true,
     });

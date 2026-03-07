@@ -1,3 +1,5 @@
+"use client";
+
 import dynamic from "next/dynamic";
 
 // Dynamically import EchoMap with SSR disabled (Mapbox GL requires the browser)

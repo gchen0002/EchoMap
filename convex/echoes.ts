@@ -1,6 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, action } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { mutation, query } from "./_generated/server";
 import {
   encodeGeohash,
   getQueryGeohashes,

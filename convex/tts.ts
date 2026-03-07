@@ -3,7 +3,7 @@
 import { createSign } from "node:crypto";
 import { v } from "convex/values";
 import { action } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 
@@ -12,6 +12,8 @@ const SYNTHESIZE_URL = "https://texttospeech.googleapis.com/v1/text:synthesize";
 const VOICE_NAME = "en-US-Standard-D";
 const LANGUAGE_CODE = "en-US";
 const MAX_TOKEN_LIFETIME_SECONDS = 60 * 60;
+const MONTHLY_CHARACTER_LIMIT = 3_500_000;
+const RESERVATION_TIMEOUT_MS = 10 * 60 * 1000;
 
 type GoogleServiceAccount = {
   client_email: string;
@@ -37,6 +39,20 @@ type GoogleTtsErrorResponse = {
     status?: string;
     message?: string;
   };
+};
+
+type TtsResult = {
+  success: true;
+  fallback?: "text_only";
+  reason?: string;
+};
+
+type QuotaReservationResult = {
+  allowed: boolean;
+  reason: string | null;
+  usedCharacters?: number;
+  reservedCharacters?: number;
+  limit?: number;
 };
 
 function toBase64Url(input: string | Buffer) {
@@ -134,6 +150,18 @@ function parseGoogleTtsError(errorPayload: GoogleTtsErrorResponse, fallbackText:
   };
 }
 
+function getCurrentUsagePeriod(now: number) {
+  const currentDate = new Date(now);
+  const year = currentDate.getUTCFullYear();
+  const month = String(currentDate.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function createReservationId(userId: Id<"users">, text: string, now: number) {
+  const randomSuffix = Math.random().toString(36).slice(2, 10);
+  return `${userId}-${text.length}-${now}-${randomSuffix}`;
+}
+
 async function saveTextOnlyEcho(
   ctx: ActionCtx,
   args: {
@@ -143,7 +171,7 @@ async function saveTextOnlyEcho(
     text: string;
   },
   reason: string
-) {
+): Promise<TtsResult> {
   console.warn("[Google Cloud TTS fallback] Saving text-only echo", {
     reason,
   });
@@ -179,7 +207,7 @@ export const generateAndCreateEcho = action({
     lng: v.number(),
     text: v.string(),
   },
-  handler: async (ctx, { userId, lat, lng, text }) => {
+  handler: async (ctx, { userId, lat, lng, text }): Promise<TtsResult> => {
     const identity = await ctx.auth.getUserIdentity();
 
     if (!identity) {
@@ -194,6 +222,37 @@ export const generateAndCreateEcho = action({
         "not_configured"
       );
     }
+
+    const now = Date.now();
+    const period = getCurrentUsagePeriod(now);
+    const requestId = createReservationId(userId, text, now);
+    const quotaReservation: QuotaReservationResult = await ctx.runMutation(
+      internal.ttsUsage.reserveMonthlyQuota,
+      {
+        period,
+        requestId,
+        characters: text.length,
+        limit: MONTHLY_CHARACTER_LIMIT,
+        expiresAt: now + RESERVATION_TIMEOUT_MS,
+      }
+    );
+
+    if (!quotaReservation.allowed) {
+      console.warn("[Google Cloud TTS quota guard] Falling back before synthesis", {
+        period,
+        usedCharacters: quotaReservation.usedCharacters,
+        reservedCharacters: quotaReservation.reservedCharacters,
+        limit: quotaReservation.limit,
+      });
+
+      return await saveTextOnlyEcho(
+        ctx,
+        { userId, lat, lng, text },
+        quotaReservation.reason ?? "monthly_quota_exceeded"
+      );
+    }
+
+    let reservationConsumed = false;
 
     try {
       const credentials = parseServiceAccount(rawCredentials);
@@ -300,6 +359,12 @@ export const generateAndCreateEcho = action({
         isAiGenerated: true,
       });
 
+      await ctx.runMutation(internal.ttsUsage.finishReservation, {
+        requestId,
+        consumed: true,
+      });
+      reservationConsumed = true;
+
       return { success: true };
     } catch (error) {
       console.error("[Google Cloud TTS unexpected failure]", {
@@ -313,6 +378,13 @@ export const generateAndCreateEcho = action({
         { userId, lat, lng, text },
         error instanceof Error ? error.message : "unexpected_error"
       );
+    } finally {
+      if (!reservationConsumed) {
+        await ctx.runMutation(internal.ttsUsage.finishReservation, {
+          requestId,
+          consumed: false,
+        });
+      }
     }
   },
 });

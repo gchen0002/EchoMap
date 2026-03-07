@@ -21,4 +21,29 @@ export default defineSchema({
   })
     .index("by_geohash", ["geohash"])
     .index("by_expires_at", ["expiresAt"]),
+
+  ttsUsage: defineTable({
+    period: v.string(),
+    usedCharacters: v.number(),
+    reservedCharacters: v.number(),
+    successfulRequests: v.number(),
+    fallbackRequests: v.number(),
+    updatedAt: v.number(),
+  }).index("by_period", ["period"]),
+
+  ttsReservations: defineTable({
+    requestId: v.string(),
+    period: v.string(),
+    characters: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("consumed"),
+      v.literal("released")
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_request_id", ["requestId"])
+    .index("by_expires_at", ["expiresAt"]),
 });

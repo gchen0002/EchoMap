@@ -10,4 +10,10 @@ crons.interval(
   internal.cleanup.deleteExpiredEchoes
 );
 
+crons.interval(
+  "cleanup stale tts reservations",
+  { minutes: 15 },
+  internal.ttsUsage.cleanupExpiredReservations
+);
+
 export default crons;

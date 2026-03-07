@@ -34,12 +34,29 @@ export default function DropEchoModal({
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      await generateAndCreateEcho({
+      const result = await generateAndCreateEcho({
         userId,
         lat: userPosition.lat,
         lng: userPosition.lng,
         text: text.trim(),
       });
+
+      if (result?.fallback === "text_only") {
+        if (result.reason === "monthly_quota_exceeded") {
+          setSubmitError(
+            "Google Cloud TTS monthly safety limit was reached, so your echo was saved as text-only and will use browser speech playback."
+          );
+        } else if (result.reason === "not_configured") {
+          setSubmitError(
+            "Google Cloud TTS is not configured, so your echo was saved as text-only and will use browser speech playback."
+          );
+        } else {
+          setSubmitError(
+            "Google Cloud TTS was unavailable, so your echo was saved as text-only and will use browser speech playback."
+          );
+        }
+      }
+
       setText("");
       onClose();
     } catch (error) {

@@ -42,6 +42,55 @@ export const upsertUser = mutation({
 /**
  * Get the current user's Convex document by their Clerk ID.
  */
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await requireIdentity(ctx);
+
+    return await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+  },
+});
+
+export const debugAuth = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    
+    if (!identity) {
+      return {
+        authenticated: false,
+        error: "No identity found",
+      };
+    }
+    
+    return {
+      authenticated: true,
+      subject: identity.subject,
+      tokenIdentifier: identity.tokenIdentifier,
+      name: identity.name,
+      email: identity.email,
+    };
+  },
+});
+
+export const debugUnauthed = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+
+    return {
+      authenticated: identity !== null,
+      subject: identity?.subject ?? null,
+    };
+  },
+});
+
+/**
+ * Get the current user's Convex document by their Clerk ID.
+ */
 export const getByClerkId = query({
   args: { clerkId: v.string() },
   handler: async (ctx, { clerkId }) => {

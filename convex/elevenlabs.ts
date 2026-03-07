@@ -35,6 +35,7 @@ export const generateAndCreateEcho = action({
 
     // Use "Rachel" voice — a clear, natural-sounding default
     const VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+    const MODEL_ID = "eleven_turbo_v2_5";
 
     // Call ElevenLabs TTS API
     const response = await fetch(
@@ -48,7 +49,7 @@ export const generateAndCreateEcho = action({
         },
         body: JSON.stringify({
           text,
-          model_id: "eleven_monolingual_v1",
+          model_id: MODEL_ID,
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
@@ -59,6 +60,13 @@ export const generateAndCreateEcho = action({
 
     if (!response.ok) {
       const errorText = await response.text();
+
+      if (response.status === 401 && errorText.includes("model_deprecated_free_tier")) {
+        throw new Error(
+          "Your ElevenLabs account cannot use the selected model on the free tier."
+        );
+      }
+
       throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`);
     }
 

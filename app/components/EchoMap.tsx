@@ -10,7 +10,7 @@ import Map, {
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
+import { useUser, UserButton, SignInButton, useAuth } from "@clerk/nextjs";
 import DropEchoModal from "./DropEchoModal";
 
 interface EchoMarker {
@@ -44,17 +44,24 @@ export default function EchoMap() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [upsertError, setUpsertError] = useState<Error | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
 
   const { user, isSignedIn } = useUser();
+  const { getToken } = useAuth();
   const { isAuthenticated: isConvexAuthenticated, isLoading: isConvexAuthLoading } =
     useConvexAuth();
   const upsertUser = useMutation(api.users.upsertUser);
   const currentUser = useQuery(
-    api.users.getByClerkId,
-    isSignedIn && user && isConvexAuthenticated ? { clerkId: user.id } : "skip"
+    api.users.getCurrentUser,
+    isSignedIn && isConvexAuthenticated ? {} : "skip"
   );
+  const debugAuth = useQuery(
+    api.users.debugAuth,
+    isSignedIn ? {} : "skip"
+  );
+  const debugUnauthed = useQuery(api.users.debugUnauthed, {});
 
   const nearbyEchoes = useQuery(
     api.echoes.getNearbyEchoes,
@@ -67,18 +74,76 @@ export default function EchoMap() {
     (echo) => Number.isFinite(echo.lat) && Number.isFinite(echo.lng)
   );
 
-  const canDropEcho = Boolean(isSignedIn && userPosition && currentUser);
+  const canDropEcho = Boolean(
+    isSignedIn && isConvexAuthenticated && userPosition && currentUser
+  );
   const isLoadingEchoes = Boolean(userPosition && nearbyEchoes === undefined);
   const nearbyPreview = echoMarkers.slice(0, 4);
 
   useEffect(() => {
-    if (isSignedIn && user && isConvexAuthenticated) {
-      void upsertUser({
-        name: user.fullName || user.username || "Anonymous",
-        avatarUrl: user.imageUrl,
-      });
+    if (
+      !isSignedIn ||
+      !user ||
+      !isConvexAuthenticated ||
+      currentUser !== null
+    ) {
+      return;
     }
-  }, [isConvexAuthenticated, isSignedIn, upsertUser, user]);
+
+    let cancelled = false;
+
+    void upsertUser({
+      name: user.fullName || user.username || "Anonymous",
+      avatarUrl: user.imageUrl,
+    })
+      .then(() => {
+        if (!cancelled) {
+          setUpsertError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to upsert user:", error);
+          setUpsertError(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, isConvexAuthenticated, isSignedIn, upsertUser, user]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development" || !isSignedIn) {
+      return;
+    }
+
+    void (async () => {
+      let templateToken: string | null = null;
+
+      try {
+        templateToken = await getToken({ template: "convex" });
+      } catch (error) {
+        console.log("[EchoMap auth probe template error]", error);
+      }
+
+      let sessionToken: string | null = null;
+
+      try {
+        sessionToken = await getToken();
+      } catch (error) {
+        console.log("[EchoMap auth probe session error]", error);
+      }
+
+      console.log("[EchoMap auth probe]", {
+        hasTemplateToken: Boolean(templateToken),
+        hasSessionToken: Boolean(sessionToken),
+        convexAuthenticated: isConvexAuthenticated,
+        convexAuthLoading: isConvexAuthLoading,
+        debugUnauthed,
+      });
+    })();
+  }, [debugUnauthed, getToken, isConvexAuthLoading, isConvexAuthenticated, isSignedIn]);
 
   const hasGeolocation =
     typeof navigator !== "undefined" && "geolocation" in navigator;
@@ -226,17 +291,25 @@ export default function EchoMap() {
 
   const dropEchoHint = !isSignedIn
     ? "Sign in to leave an echo."
+    : upsertError
+      ? `Account error: ${upsertError.message}`
     : isConvexAuthLoading
       ? "Connecting your account."
+    : !debugAuth
+      ? "Convex auth not established yet"
+    : debugAuth && !debugAuth.authenticated
+      ? `Auth debug: ${debugAuth.error}`
+    : debugUnauthed && !debugUnauthed.authenticated
+      ? "Convex debug: backend sees no token"
     : displayGeoError === "permission"
       ? "Allow location access in your browser settings."
-      : displayGeoError
-        ? "Location unavailable. Try refreshing the page."
-        : !userPosition
-          ? "Enable location to drop an echo."
-          : !currentUser
-            ? "Syncing your account."
-            : `People within ${DISCOVERY_RADIUS_LABEL} can hear your echo for 24 hours.`;
+    : displayGeoError
+      ? "Location unavailable. Try refreshing the page."
+    : !userPosition
+      ? "Enable location to drop an echo."
+    : !currentUser
+      ? "Syncing your account."
+      : `People within ${DISCOVERY_RADIUS_LABEL} can hear your echo for 24 hours.`;
 
   if (!mapboxToken) {
     return (

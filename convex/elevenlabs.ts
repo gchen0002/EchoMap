@@ -67,6 +67,13 @@ export const generateAndCreateEcho = action({
       body: audioBlob,
     });
 
+    if (!uploadResponse.ok) {
+      const uploadErrorText = await uploadResponse.text();
+      throw new Error(
+        `Convex storage upload failed: ${uploadResponse.status} - ${uploadErrorText}`
+      );
+    }
+
     const { storageId } = (await uploadResponse.json()) as {
       storageId: string;
     };

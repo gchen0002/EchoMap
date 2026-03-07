@@ -4,9 +4,7 @@ import { useRef, useState, useCallback, useEffect } from "react";
 import Map, {
   Marker,
   NavigationControl,
-  GeolocateControl,
   MapRef,
-  type GeolocateResultEvent,
   type MarkerEvent,
 } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -39,11 +37,13 @@ type GeoErrorType = "permission" | "timeout" | "unavailable" | null;
 
 export default function EchoMap() {
   const mapRef = useRef<MapRef>(null);
+  const hasAutoCenteredRef = useRef(false);
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [geoError, setGeoError] = useState<GeoErrorType>(null);
   const [selectedEcho, setSelectedEcho] = useState<EchoMarker | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
 
@@ -79,43 +79,103 @@ export default function EchoMap() {
     }
   }, [isSignedIn, user, upsertUser]);
 
-  const hasGeolocation = Boolean(navigator.geolocation);
+  const hasGeolocation =
+    typeof navigator !== "undefined" && "geolocation" in navigator;
+
+  const centerMapOnUser = useCallback((lng: number, lat: number) => {
+    const map = mapRef.current;
+
+    if (!map) return;
+
+    map.flyTo({
+      center: [lng, lat],
+      zoom: Math.max(map.getZoom(), 15.5),
+      essential: true,
+      duration: 900,
+    });
+  }, []);
+
+  const applyPosition = useCallback(
+    (coords: Pick<GeolocationCoordinates, "latitude" | "longitude">, shouldCenter = false) => {
+      setGeoError(null);
+
+      const nextPosition = {
+        lat: coords.latitude,
+        lng: coords.longitude,
+      };
+
+      setUserPosition(nextPosition);
+
+      if (shouldCenter) {
+        hasAutoCenteredRef.current = true;
+        centerMapOnUser(nextPosition.lng, nextPosition.lat);
+      }
+    },
+    [centerMapOnUser]
+  );
+
+  const handleGeoError = useCallback((err: GeolocationPositionError) => {
+    console.error("Geolocation error:", err);
+
+    if (err.code === err.PERMISSION_DENIED) {
+      setGeoError("permission");
+    } else if (err.code === err.TIMEOUT) {
+      setGeoError("timeout");
+    } else {
+      setGeoError("unavailable");
+    }
+  }, []);
+
+  const locateUser = useCallback(() => {
+    if (!hasGeolocation) {
+      setGeoError("unavailable");
+      return;
+    }
+
+    setIsLocating(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setIsLocating(false);
+        applyPosition(pos.coords, true);
+      },
+      (err) => {
+        setIsLocating(false);
+        handleGeoError(err);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    );
+  }, [applyPosition, handleGeoError, hasGeolocation]);
 
   useEffect(() => {
     if (!hasGeolocation) return;
 
     let mounted = true;
 
-    const handleGeoError = (err: GeolocationPositionError) => {
-      if (!mounted) return;
-      console.error("Geolocation error:", err);
-      if (err.code === err.PERMISSION_DENIED) {
-        setGeoError("permission");
-      } else if (err.code === err.TIMEOUT) {
-        setGeoError("timeout");
-      } else {
-        setGeoError("unavailable");
-      }
-    };
-
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         if (!mounted) return;
-        setGeoError(null);
-        setUserPosition({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        });
+        applyPosition(pos.coords);
       },
-      handleGeoError,
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      (err) => {
+        if (!mounted) return;
+        handleGeoError(err);
+      },
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 10000 }
     );
 
     return () => {
       mounted = false;
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [hasGeolocation]);
+  }, [applyPosition, handleGeoError, hasGeolocation]);
+
+  useEffect(() => {
+    if (!userPosition || hasAutoCenteredRef.current) return;
+
+    hasAutoCenteredRef.current = true;
+    centerMapOnUser(userPosition.lng, userPosition.lat);
+  }, [centerMapOnUser, userPosition]);
 
   const displayGeoError = !hasGeolocation ? "unavailable" as const : geoError;
 
@@ -150,6 +210,8 @@ export default function EchoMap() {
       ? "Location timeout - try again"
       : displayGeoError === "unavailable"
         ? "Location unavailable"
+        : isLocating
+          ? "Finding your location"
         : !userPosition
           ? "Waiting for location..."
           : isLoadingEchoes
@@ -199,17 +261,6 @@ export default function EchoMap() {
         onClick={() => setSelectedEcho(null)}
       >
         <NavigationControl position="top-right" />
-        <GeolocateControl
-          position="top-right"
-          trackUserLocation
-          showUserHeading
-          onGeolocate={(e: GeolocateResultEvent) => {
-            setUserPosition({
-              lat: e.coords.latitude,
-              lng: e.coords.longitude,
-            });
-          }}
-        />
 
         {userPosition && (
           <Marker latitude={userPosition.lat} longitude={userPosition.lng}>
@@ -248,6 +299,14 @@ export default function EchoMap() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={locateUser}
+              disabled={isLocating}
+              className="rounded-[8px] border border-[#3a3d3e] bg-[#202324] px-3 py-2 text-sm text-[#f3f3ef] transition-colors hover:bg-[#26292a] disabled:cursor-wait disabled:text-[#8f948b]"
+            >
+              {isLocating ? "Locating..." : "Locate me"}
+            </button>
             {!isSignedIn ? (
               <SignInButton mode="modal">
                 <button className="rounded-[8px] border border-[#3a3d3e] bg-[#202324] px-3 py-2 text-sm text-[#f3f3ef] transition-colors hover:bg-[#26292a]">
@@ -329,19 +388,39 @@ export default function EchoMap() {
                     Location permission denied. Enable it in your browser settings.
                   </p>
                 ) : displayGeoError === "timeout" ? (
-                  <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
-                    Location request timed out. Please try again.
-                  </p>
+                  <div className="px-4 py-4">
+                    <p className="text-sm leading-6 text-[#a7aba4]">
+                      Location request timed out. Try locating again.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={locateUser}
+                      disabled={isLocating}
+                      className="mt-3 rounded-[8px] border border-[#3a3d3e] bg-[#202324] px-3 py-2 text-sm text-[#f3f3ef] transition-colors hover:bg-[#26292a] disabled:cursor-wait disabled:text-[#8f948b]"
+                    >
+                      {isLocating ? "Locating..." : "Try again"}
+                    </button>
+                  </div>
                 ) : displayGeoError === "unavailable" ? (
                   <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
                     Location unavailable on this device.
                   </p>
                 ) : (
-                  <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
-                    {isSignedIn
-                      ? "Sign in, then enable location to drop an echo."
-                      : "Enable location to see echoes around you."}
-                  </p>
+                  <div className="px-4 py-4">
+                    <p className="text-sm leading-6 text-[#a7aba4]">
+                      {isSignedIn
+                        ? "Use Locate me to find echoes around you and drop your own."
+                        : "Use Locate me to find echoes around you."}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={locateUser}
+                      disabled={isLocating}
+                      className="mt-3 rounded-[8px] border border-[#3a3d3e] bg-[#202324] px-3 py-2 text-sm text-[#f3f3ef] transition-colors hover:bg-[#26292a] disabled:cursor-wait disabled:text-[#8f948b]"
+                    >
+                      {isLocating ? "Locating..." : "Locate me"}
+                    </button>
+                  </div>
                 )
               ) : isLoadingEchoes ? (
                 <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">

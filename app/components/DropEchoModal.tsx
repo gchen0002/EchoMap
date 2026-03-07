@@ -21,6 +21,7 @@ export default function DropEchoModal({
 }: DropEchoModalProps) {
   const [text, setText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   
   // We'll use the ElevenLabs action right now
   const generateAndCreateEcho = useAction(api.elevenlabs.generateAndCreateEcho);
@@ -32,6 +33,7 @@ export default function DropEchoModal({
     if (!text.trim()) return;
 
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
       await generateAndCreateEcho({
         userId,
@@ -43,7 +45,15 @@ export default function DropEchoModal({
       onClose();
     } catch (error) {
       console.error("Failed to drop echo:", error);
-      alert("Failed to generate audio. Check API keys and console.");
+      if (error instanceof Error) {
+        if (error.message.includes("ELEVENLABS_API_KEY")) {
+          setSubmitError("ElevenLabs is not configured yet.");
+        } else {
+          setSubmitError(error.message);
+        }
+      } else {
+        setSubmitError("Failed to generate audio for this echo.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -77,6 +87,11 @@ export default function DropEchoModal({
           </p>
 
           <form onSubmit={handleSubmit}>
+            {submitError && (
+              <div className="mb-4 rounded-[8px] border border-[#6a4a3d] bg-[#2b201c] px-3 py-2 text-sm text-[#e6c3b4]">
+                {submitError}
+              </div>
+            )}
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import Map, {
   Marker,
   NavigationControl,
@@ -15,19 +15,6 @@ import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
 import DropEchoModal from "./DropEchoModal";
 import { DISCOVERY_RADIUS_METERS } from "../../lib/geohash";
 import { shouldRequestPreciseLocation } from "./echoMapLocation";
-
-interface EchoMarker {
-  _id: string;
-  lat: number;
-  lng: number;
-  userName: string;
-  userAvatar: string;
-  audioUrl: string | null;
-  text?: string;
-  distance: number;
-  isAiGenerated: boolean;
-  createdAt: number;
-}
 
 interface UserPosition {
   lat: number;
@@ -44,14 +31,16 @@ export default function EchoMap() {
   const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [geoError, setGeoError] = useState<GeoErrorType>(null);
-  const [selectedEcho, setSelectedEcho] = useState<EchoMarker | null>(null);
+  const [selectedEchoId, setSelectedEchoId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
   const [isTeleportModeEnabled, setIsTeleportModeEnabled] = useState(false);
+  const [isNearbyExpanded, setIsNearbyExpanded] = useState(false);
   const [teleportPulse, setTeleportPulse] = useState<{ lat: number; lng: number } | null>(null);
   const [upsertError, setUpsertError] = useState<Error | null>(null);
+  const [timeTick, setTimeTick] = useState(() => Date.now());
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
 
@@ -82,6 +71,19 @@ export default function EchoMap() {
   );
   const isLoadingEchoes = Boolean(userPosition && nearbyEchoes === undefined);
   const nearbyPreview = echoMarkers.slice(0, 4);
+  const visibleNearbyEchoes = isNearbyExpanded ? echoMarkers : nearbyPreview;
+  const selectedEcho = useMemo(
+    () => echoMarkers.find((echo) => echo._id === selectedEchoId) ?? null,
+    [echoMarkers, selectedEchoId]
+  );
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTimeTick(Date.now());
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     if (
@@ -257,7 +259,7 @@ export default function EchoMap() {
 
   const handleMapClick = useCallback(
     (event: MapMouseEvent) => {
-      setSelectedEcho(null);
+      setSelectedEchoId(null);
 
       if (!isTeleportModeActive) {
         return;
@@ -362,6 +364,31 @@ export default function EchoMap() {
     });
   };
 
+  const formatTimeLeft = useCallback((expiresAt: number) => {
+    const remainingMs = expiresAt - timeTick;
+
+    if (remainingMs <= 0) {
+      return "expired";
+    }
+
+    const totalMinutes = Math.ceil(remainingMs / 60000);
+
+    if (totalMinutes < 60) {
+      return `${totalMinutes}m left`;
+    }
+
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours < 24) {
+      return minutes === 0 ? `${hours}h left` : `${hours}h ${minutes}m left`;
+    }
+
+    const days = Math.floor(hours / 24);
+    const leftoverHours = hours % 24;
+    return leftoverHours === 0 ? `${days}d left` : `${days}d ${leftoverHours}h left`;
+  }, [timeTick]);
+
   const mapStatus = displayGeoError === "permission"
     ? "Location permission denied"
     : displayGeoError === "timeout"
@@ -453,7 +480,7 @@ export default function EchoMap() {
             longitude={echo.lng}
             onClick={(e: MarkerEvent<MouseEvent>) => {
               e.originalEvent.stopPropagation();
-              setSelectedEcho(echo as unknown as EchoMarker);
+               setSelectedEchoId(echo._id);
             }}
           >
             <button
@@ -531,12 +558,16 @@ export default function EchoMap() {
                   <div className="truncate text-sm font-medium text-[#f3f3ef]">
                     {selectedEcho.userName}
                   </div>
-                  <div className="mt-1 text-xs text-[#a7aba4]">
-                    {selectedEcho.distance}m away • {formatTimestamp(selectedEcho.createdAt)}
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#a7aba4]">
+                    <span>{selectedEcho.distance}m away</span>
+                    <span>{formatTimestamp(selectedEcho.createdAt)}</span>
+                    <span className="rounded-full border border-[#324027] bg-[#1e2818] px-2 py-0.5 text-[#bed3a7]">
+                      {formatTimeLeft(selectedEcho.expiresAt)}
+                    </span>
                   </div>
                 </div>
                 <button
-                  onClick={() => setSelectedEcho(null)}
+                  onClick={() => setSelectedEchoId(null)}
                   className="rounded-[8px] border border-[#3a3d3e] px-2 py-1 text-sm text-[#c0c4bd] transition-colors hover:bg-[#232627] hover:text-[#f3f3ef]"
                 >
                   Close
@@ -553,7 +584,7 @@ export default function EchoMap() {
 
               <div className="mt-4 flex items-center justify-between gap-3">
                 <div className="text-xs text-[#8f948b]">
-                  Available within {DISCOVERY_RADIUS_LABEL}
+                  Available within {DISCOVERY_RADIUS_LABEL} • {selectedEcho.isAiGenerated ? "AI voice" : "Recorded voice"}
                 </div>
                 {selectedEcho.audioUrl ? (
                   <button
@@ -565,9 +596,7 @@ export default function EchoMap() {
                 ) : selectedEcho.text ? (
                   <button
                     onClick={() => {
-                      if (!speakText(selectedEcho.text!)) {
-                        setSelectedEcho(selectedEcho);
-                      }
+                      speakText(selectedEcho.text!);
                     }}
                     className="rounded-[8px] bg-[#8ea26f] px-3 py-2 text-sm font-medium text-[#121314] transition-colors hover:bg-[#9aae7d]"
                   >
@@ -581,7 +610,18 @@ export default function EchoMap() {
           ) : (
             <div>
               <div className="border-b border-[#2b2e2f] px-4 py-3 text-sm font-medium text-[#f3f3ef]">
-                Nearby echoes
+                <div className="flex items-center justify-between gap-3">
+                  <span>Nearby echoes</span>
+                  {echoMarkers.length > 4 ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsNearbyExpanded((current) => !current)}
+                      className="rounded-[8px] border border-[#3a3d3e] px-2 py-1 text-xs text-[#c0c4bd] transition-colors hover:bg-[#232627] hover:text-[#f3f3ef]"
+                    >
+                      {isNearbyExpanded ? "Show less" : `See all ${echoMarkers.length}`}
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
               {!userPosition ? (
@@ -628,17 +668,17 @@ export default function EchoMap() {
                 <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
                   Looking for echoes nearby.
                 </p>
-              ) : nearbyPreview.length === 0 ? (
+              ) : visibleNearbyEchoes.length === 0 ? (
                 <p className="px-4 py-4 text-sm leading-6 text-[#a7aba4]">
                   No active echoes are nearby.
                 </p>
               ) : (
                 <div>
-                  {nearbyPreview.map((echo, index) => (
+                  {visibleNearbyEchoes.map((echo, index) => (
                     <button
                       key={echo._id}
                       type="button"
-                      onClick={() => setSelectedEcho(echo as unknown as EchoMarker)}
+                       onClick={() => setSelectedEchoId(echo._id)}
                       className={`block w-full px-4 py-3 text-left transition-colors hover:bg-[#202324] ${
                         index > 0 ? "border-t border-[#2b2e2f]" : ""
                       }`}
@@ -647,10 +687,18 @@ export default function EchoMap() {
                         <span className="truncate text-sm font-medium text-[#f3f3ef]">
                           {echo.userName}
                         </span>
-                        <span className="text-xs text-[#8f948b]">{echo.distance}m</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-[#8f948b]">{echo.distance}m</span>
+                          <span className="rounded-full border border-[#324027] bg-[#1e2818] px-2 py-0.5 text-[11px] text-[#bed3a7]">
+                            {formatTimeLeft(echo.expiresAt)}
+                          </span>
+                        </div>
                       </div>
                       <div className="mt-1 truncate text-sm text-[#a7aba4]">
                         {echo.text || "Audio echo"}
+                      </div>
+                      <div className="mt-1 text-xs text-[#6f746d]">
+                        {echo.isAiGenerated ? "AI voice" : "Recorded voice"}
                       </div>
                     </button>
                   ))}

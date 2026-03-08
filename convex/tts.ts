@@ -14,6 +14,9 @@ const LANGUAGE_CODE = "en-US";
 const MAX_TOKEN_LIFETIME_SECONDS = 60 * 60;
 const MONTHLY_CHARACTER_LIMIT = 3_500_000;
 const RESERVATION_TIMEOUT_MS = 10 * 60 * 1000;
+const GOOGLE_TTS_MAX_ATTEMPTS = 3;
+const RETRYABLE_HTTP_STATUS_CODES = new Set([500, 502, 503, 504]);
+const RETRYABLE_GOOGLE_STATUSES = new Set(["INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED"]);
 
 type GoogleServiceAccount = {
   client_email: string;
@@ -31,6 +34,10 @@ type GoogleTokenResponse = {
 
 type GoogleTtsSuccessResponse = {
   audioContent?: string;
+};
+
+type GoogleTtsAudioPayload = {
+  audioContent: string;
 };
 
 type GoogleTtsErrorResponse = {
@@ -162,6 +169,97 @@ function createReservationId(userId: Id<"users">, text: string, now: number) {
   return `${userId}-${text.length}-${now}-${randomSuffix}`;
 }
 
+function isRetryableGoogleTtsError(statusCode: number, errorStatus: string | null) {
+  return (
+    RETRYABLE_HTTP_STATUS_CODES.has(statusCode) ||
+    (errorStatus !== null && RETRYABLE_GOOGLE_STATUSES.has(errorStatus))
+  );
+}
+
+function buildSynthesizeRequest(text: string, accessToken: string) {
+  return fetch(SYNTHESIZE_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      input: { text },
+      voice: {
+        languageCode: LANGUAGE_CODE,
+        name: VOICE_NAME,
+        ssmlGender: "MALE",
+      },
+      audioConfig: {
+        audioEncoding: "MP3",
+      },
+    }),
+  });
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function synthesizeGoogleTtsWithRetry(args: {
+  accessToken: string;
+  text: string;
+  logPrefix: string;
+}): Promise<GoogleTtsAudioPayload> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= GOOGLE_TTS_MAX_ATTEMPTS; attempt += 1) {
+    const response = await buildSynthesizeRequest(args.text, args.accessToken);
+
+    if (response.ok) {
+      const synthPayload = (await response.json()) as GoogleTtsSuccessResponse;
+
+      if (!synthPayload.audioContent) {
+        throw new Error("Google Cloud TTS returned no audio content");
+      }
+
+      return {
+        audioContent: synthPayload.audioContent,
+      };
+    }
+
+    const errorText = await response.text();
+    let parsedError: GoogleTtsErrorResponse = {};
+
+    try {
+      parsedError = JSON.parse(errorText) as GoogleTtsErrorResponse;
+    } catch {
+      parsedError = {};
+    }
+
+    const errorDetails = parseGoogleTtsError(parsedError, errorText);
+
+    console.error(`[${args.logPrefix}]`, {
+      attempt,
+      statusCode: response.status,
+      errorStatus: errorDetails.status,
+      errorCode: errorDetails.code,
+      errorMessage: errorDetails.message,
+      rawError: errorText,
+      voiceName: VOICE_NAME,
+      languageCode: LANGUAGE_CODE,
+      textPreview: args.text.slice(0, 80),
+    });
+
+    lastError = new Error(
+      `Google Cloud TTS error [${errorDetails.status ?? response.status}]: ${errorDetails.message}`
+    );
+
+    if (!isRetryableGoogleTtsError(response.status, errorDetails.status) || attempt === GOOGLE_TTS_MAX_ATTEMPTS) {
+      throw lastError;
+    }
+
+    await delay(attempt * 750);
+  }
+
+  throw lastError ?? new Error("Google Cloud TTS failed after retries");
+}
+
 async function saveTextOnlyEcho(
   ctx: ActionCtx,
   args: {
@@ -258,62 +356,19 @@ export const generateAndCreateEcho = action({
       const credentials = parseServiceAccount(rawCredentials);
       const accessToken = await getGoogleAccessToken(credentials);
 
-      const response = await fetch(SYNTHESIZE_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          input: { text },
-          voice: {
-            languageCode: LANGUAGE_CODE,
-            name: VOICE_NAME,
-            ssmlGender: "MALE",
-          },
-          audioConfig: {
-            audioEncoding: "MP3",
-          },
-        }),
-      });
+      let synthPayload: GoogleTtsAudioPayload;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let parsedError: GoogleTtsErrorResponse = {};
-
-        try {
-          parsedError = JSON.parse(errorText) as GoogleTtsErrorResponse;
-        } catch {
-          parsedError = {};
-        }
-
-        const errorDetails = parseGoogleTtsError(parsedError, errorText);
-
-        console.error("[Google Cloud TTS failed]", {
-          statusCode: response.status,
-          errorStatus: errorDetails.status,
-          errorCode: errorDetails.code,
-          errorMessage: errorDetails.message,
-          rawError: errorText,
-          voiceName: VOICE_NAME,
-          languageCode: LANGUAGE_CODE,
-          textPreview: text.slice(0, 80),
+      try {
+        synthPayload = await synthesizeGoogleTtsWithRetry({
+          accessToken,
+          text,
+          logPrefix: "Google Cloud TTS failed",
         });
-
+      } catch (error) {
         return await saveTextOnlyEcho(
           ctx,
           { userId, lat, lng, text },
-          errorDetails.status ?? `http_${response.status}`
-        );
-      }
-
-      const synthPayload = (await response.json()) as GoogleTtsSuccessResponse;
-
-      if (!synthPayload.audioContent) {
-        return await saveTextOnlyEcho(
-          ctx,
-          { userId, lat, lng, text },
-          "missing_audio_content"
+          error instanceof Error ? error.message : "tts_request_failed"
         );
       }
 
@@ -324,7 +379,7 @@ export const generateAndCreateEcho = action({
         projectId: credentials.project_id,
       });
 
-      const audioBuffer = Buffer.from(synthPayload.audioContent, "base64");
+      const audioBuffer = Uint8Array.from(Buffer.from(synthPayload.audioContent, "base64"));
       const uploadUrl = await ctx.runMutation(api.echoes.generateUploadUrl);
       const uploadResponse = await fetch(uploadUrl, {
         method: "POST",
@@ -426,58 +481,13 @@ export const generateAndCreateSeedEcho = internalAction({
       const credentials = parseServiceAccount(rawCredentials);
       const accessToken = await getGoogleAccessToken(credentials);
 
-      const response = await fetch(SYNTHESIZE_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          input: { text },
-          voice: {
-            languageCode: LANGUAGE_CODE,
-            name: VOICE_NAME,
-            ssmlGender: "MALE",
-          },
-          audioConfig: {
-            audioEncoding: "MP3",
-          },
-        }),
+      const synthPayload = await synthesizeGoogleTtsWithRetry({
+        accessToken,
+        text,
+        logPrefix: "Google Cloud TTS seed failed",
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let parsedError: GoogleTtsErrorResponse = {};
-
-        try {
-          parsedError = JSON.parse(errorText) as GoogleTtsErrorResponse;
-        } catch {
-          parsedError = {};
-        }
-
-        const errorDetails = parseGoogleTtsError(parsedError, errorText);
-        console.error("[Google Cloud TTS seed failed]", {
-          statusCode: response.status,
-          errorStatus: errorDetails.status,
-          errorCode: errorDetails.code,
-          errorMessage: errorDetails.message,
-          rawError: errorText,
-          voiceName: VOICE_NAME,
-          languageCode: LANGUAGE_CODE,
-          textPreview: text.slice(0, 80),
-        });
-
-        throw new Error(
-          `Google Cloud TTS error [${errorDetails.status ?? response.status}]: ${errorDetails.message}`
-        );
-      }
-
-      const synthPayload = (await response.json()) as GoogleTtsSuccessResponse;
-      if (!synthPayload.audioContent) {
-        throw new Error("Google Cloud TTS returned no audio content");
-      }
-
-      const audioBuffer = Buffer.from(synthPayload.audioContent, "base64");
+      const audioBuffer = Uint8Array.from(Buffer.from(synthPayload.audioContent, "base64"));
       const uploadUrl = await ctx.runMutation(internal.echoes.generateUploadUrlInternal, {});
       const uploadResponse = await fetch(uploadUrl, {
         method: "POST",

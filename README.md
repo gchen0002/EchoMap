@@ -2,6 +2,8 @@
 
 Drop a voice. Discover a moment.
 
+Live: `https://echomap.live`
+
 EchoMap is a location-based social app built during TreeLine Hacks. Users can leave short, ephemeral audio notes at real-world coordinates, and nearby people can discover them on a live map when they move within range.
 
 ## What it does
@@ -102,10 +104,17 @@ npm run seed
 
 This creates demo users plus multiple demo echoes so the map is not empty during demos.
 
+If you want to seed the production deployment instead of the currently configured local/dev deployment, run:
+
+```bash
+npx convex run --prod convex/seed:seedData
+```
+
 Important:
 
 - The seed flow uses the internal Google TTS path and expects `GOOGLE_APPLICATION_CREDENTIALS_JSON` to be configured
 - User-created echoes gracefully fall back to text-only mode when Google TTS is unavailable
+- `npm run seed` targets the current Convex deployment from your local env configuration
 
 ## Project structure
 
@@ -144,7 +153,7 @@ and package config files
 
 ## Deployment
 
-The project is set up for Cloudflare via OpenNext.
+The project is set up for Cloudflare via OpenNext and is live at `https://echomap.live`.
 
 ```bash
 npm run preview
@@ -156,6 +165,11 @@ Relevant files:
 - `open-next.config.ts`
 - `wrangler.jsonc`
 - `middleware.ts`
+
+Production notes:
+
+- The custom domain is managed through Cloudflare DNS
+- `NEXT_PUBLIC_*` values must be available to the Cloudflare build so Next.js can inline them correctly
 
 ## Hackathon context
 
